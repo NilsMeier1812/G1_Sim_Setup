@@ -1,0 +1,26 @@
+<mujoco model="MuJoCo Model">
+  <compiler angle="radian" />
+  <size nkey="1" />
+  <asset>
+    <mesh name="asset_arbeitsplatz_station.stl_0000_mesh" file="meshes/arbeitsplatz_station.stl" />
+  </asset>
+  <worldbody>
+    <geom name="asset_arbeitsplatz_station.stl_0000" pos="0.427239 1.8394 -0.652149" quat="0.706015 0 0 0.708197" type="mesh" mass="0" mesh="asset_arbeitsplatz_station.stl_0000_mesh" />
+    <light pos="0 0 5" />
+    <body name="box_0001_body_0">
+      <joint type="free" />
+      <geom name="grasp_box_0001" size="0.05 0.05 0.05" pos="0.367978 -0.213428 0.85967" quat="0.999769 0 0.0214964 0" type="box" rgba="0.784314 0.392157 0.941176 1" mass="0.2" />
+    </body>
+    <body name="grasp_cylinder_0002_body_1">
+      <joint type="free" />
+      <geom name="grasp_cylinder_0002" size="0.05 0.1" pos="0.367978 0.51492 0.85967" quat="0.999769 0 0.0214964 0" type="cylinder" rgba="0.286275 0.207843 0.988235 1" mass="0.2" />
+    </body>
+    <body name="grasp_cylinder_0003_body_2">
+      <joint type="free" />
+      <geom name="grasp_cylinder_0003" size="0.02 0.1" pos="0.367978 0.0873031 0.85967" quat="0.999769 0 0.0214964 0" type="cylinder" rgba="0.0352941 0.529412 0.0941176 1" mass="0.2" />
+    </body>
+  </worldbody>
+  <keyframe>
+    <key name="home" qpos="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0" />
+  </keyframe>
+</mujoco>
