@@ -6,13 +6,26 @@ mujoco-scene-editor==0.1.3
 # gebraucht (Laden von robot_descriptions). Ohne das crasht mjcreate/mjedit.
 yourdfpy
 
-# trimesh + vhacdx: konvexe Zerlegung statischer Mesh-Hindernisse in
-# build_env_scene.py (add_collision_hulls). Ohne die beiden kollidiert ein
-# Mesh-Geom nur mit seiner EINEN konvexen Huelle -- bei einem
-# Arbeitsplatz/Regal "fuellt" die den offenen Raum auf: abgelegte
-# Greif-Objekte starten IN der Huelle und werden beim ersten Sim-Schritt
-# weggeschossen (kommt als staendiges [scene-reset] im Log). Fehlen die
-# Pakete, faellt build_env_scene.py mit einer Warnung still auf die
-# unzerlegte Huelle zurueck -- keine sichtbare Fehlermeldung.
+# CAD-Import (STEP/IGES/BREP): OpenCascade-Bindings. MuJoCo kann kein CAD
+# lesen - cad_import.py tesseliert die Baugruppe Bauteil fuer Bauteil. Reines
+# pip-Wheel (~70 MB), braucht keine zusaetzlichen System-Bibliotheken.
+cadquery-ocp
+
+# Konvexe Zerlegung (CoACD): konkave Teile (L-foermige Wand, hohles Gehaeuse)
+# kollidieren in MuJoCo sonst als gefuellter Block (konvexe Huelle).
+coacd
+
+# Mesh-Formate (PLY/GLB/OBJ/...) und Zerlegen zu grosser Netze. Kommt schon
+# mit dem Editor, hier explizit, weil cad_import.py und build_env_scene.py es
+# direkt benutzen.
 trimesh
+
+# vhacdx: konvexe Zerlegung statischer Mesh-Hindernisse, die NICHT aus einem
+# CAD-Import stammen (build_env_scene.py, add_collision_hulls - z.B. ein per
+# STL eingefuegter Arbeitsplatz). Ohne vhacdx kollidiert so ein Mesh nur mit
+# seiner EINEN konvexen Huelle -- bei einem Arbeitsplatz/Regal "fuellt" die den
+# offenen Raum auf: abgelegte Greif-Objekte starten IN der Huelle und werden
+# beim ersten Sim-Schritt weggeschossen (staendiges [scene-reset] im Log).
+# Fehlt das Paket, faellt build_env_scene.py mit einer Warnung auf die
+# unzerlegte Huelle zurueck.
 vhacdx

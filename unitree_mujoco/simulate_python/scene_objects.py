@@ -27,6 +27,7 @@ dekorative Objekte (contype=0 UND conaffinity=0) werden komplett
 ausgeklammert (weder Hindernis noch greifbar) -- dieselbe Konvention wie im
 Scene-Editor-README.
 """
+import functools
 import os
 import re
 import struct
@@ -108,20 +109,34 @@ def _mesh_local_aabb_half(stl_path: Path):
     return aabb[1] if aabb is not None else None
 
 
-def _center_half(xs, ys, zs):
-    return (((xs[0] + xs[1]) / 2.0, (ys[0] + ys[1]) / 2.0, (zs[0] + zs[1]) / 2.0),
-            ((xs[1] - xs[0]) / 2.0, (ys[1] - ys[0]) / 2.0, (zs[1] - zs[0]) / 2.0))
-
-
 def _mesh_local_aabb(stl_path: Path):
-    """(Mitte, Halbe Kantenlaengen) der Bounding-Box (lokal, VOR Skalierung) eines
-    STL-Meshes.
+    """Wie _mesh_aabb_cached, aber mit Cache pro Datei: CAD-Umgebungen
+    platzieren dasselbe Mesh oft dutzendfach (Profile, Schrauben)."""
+    try:
+        mtime = stl_path.stat().st_mtime
+    except OSError:
+        return None
+    return _mesh_aabb_cached(str(stl_path), mtime)
+
+
+def _center_half(xs, ys, zs):
+    """(Mitte, Halbe Kantenlaengen) aus den Koordinaten-Spalten bzw. [min, max]."""
+    x0, x1, y0, y1, z0, z1 = min(xs), max(xs), min(ys), max(ys), min(zs), max(zs)
+    return (((x0 + x1) / 2.0, (y0 + y1) / 2.0, (z0 + z1) / 2.0),
+            ((x1 - x0) / 2.0, (y1 - y0) / 2.0, (z1 - z0) / 2.0))
+
+
+@functools.lru_cache(maxsize=4096)
+def _mesh_aabb_cached(stl_path_str: str, _mtime: float):
+    """(Mitte, Halbe Kantenlaengen) der Bounding-Box (lokal, VOR Skalierung)
+    eines STL-Meshes.
 
     Reine Bounding-Box, kein Convex-Hull -- reicht fuer die 2D-Fussabdruck-
     Rasterung (Nav) und als konservative Kollisions-Naeherung (IK). Unterstuetzt
     binaeres STL (Standardfall der Editor-Exporte); bei ASCII-STL wird ein
     einfacher Text-Parser als Fallback versucht.
     """
+    stl_path = Path(stl_path_str)
     try:
         data = stl_path.read_bytes()
     except OSError:
@@ -130,20 +145,12 @@ def _mesh_local_aabb(stl_path: Path):
         ntri = struct.unpack_from("<I", data, 80)[0]
         expected = 84 + ntri * 50
         if ntri > 0 and expected == len(data):
-            xs = [1e30, -1e30]
-            ys = [1e30, -1e30]
-            zs = [1e30, -1e30]
-            off = 84
-            for _ in range(ntri):
-                # 12 floats: normal(3) + v1(3) + v2(3) + v3(3), dann 2 Byte attr.
-                vals = struct.unpack_from("<12f", data, off)
-                for k in range(3):
-                    vx, vy, vz = vals[3 + 3 * k], vals[4 + 3 * k], vals[5 + 3 * k]
-                    xs[0] = min(xs[0], vx); xs[1] = max(xs[1], vx)
-                    ys[0] = min(ys[0], vy); ys[1] = max(ys[1], vy)
-                    zs[0] = min(zs[0], vz); zs[1] = max(zs[1], vz)
-                off += 50
-            return _center_half(xs, ys, zs)
+            # 12 floats: normal(3) + v1(3) + v2(3) + v3(3), dann 2 Byte attr.
+            # Spaltenweise per Slicing statt Dreieck fuer Dreieck - bei
+            # CAD-Meshes mit 100000 Dreiecken sonst sekundenlang.
+            vals = [v for t in struct.iter_unpack("<12fH", data[84:expected])
+                    for v in t[3:12]]
+            return _center_half(vals[0::3], vals[1::3], vals[2::3])
     # ASCII-STL-Fallback: Zeilen "vertex x y z" auswerten.
     try:
         text = data.decode("ascii", errors="ignore")
@@ -217,9 +224,26 @@ def _collect_mesh_assets(root, scene_dir: Path):
             meshes[name] = {
                 "file": str(mesh_path),
                 "basename": os.path.basename(file_),
+                "resource": mesh_resource_path(mesh_path),
                 "scale": tuple(scale[:3]),
             }
     return meshes
+
+
+def mesh_resource_path(mesh_path) -> str:
+    """Pfad eines Meshes relativ zu scene_editor/ (mit '/').
+
+    Genau dieser Ordner ist im ROS-Container als /scene_editor gemountet
+    (docker-compose.yml) - RViz braucht also den Pfad DARUNTER, nicht nur den
+    Dateinamen: Umgebungen bringen ihre Meshes in scenes/<name>/meshes/ mit,
+    aeltere Umgebungen nutzen die Bibliothek meshes/. Liegt das Mesh woanders,
+    bleibt es beim Dateinamen.
+    """
+    parts = Path(mesh_path).parts
+    for i in range(len(parts) - 2, -1, -1):
+        if parts[i] == "scene_editor":
+            return "/".join(parts[i + 1:])
+    return os.path.basename(str(mesh_path))
 
 
 def _geom_spec(geom_el, meshes: dict, base_pos, base_quat, has_collision_body=False):
@@ -234,7 +258,11 @@ def _geom_spec(geom_el, meshes: dict, base_pos, base_quat, has_collision_body=Fa
     COLLISION_BODY_SUFFIX) -- trotz contype/conaffinity 0 ein Hindernis.
     """
     name = geom_el.get("name") or ""
-    gtype = geom_el.get("type", "box")
+    # MuJoCos Default-Geomtyp ist "sphere" (nicht "box") -- der Scene-Editor
+    # laesst type= bei Kugeln weg. build_env_scene.py schreibt den Typ zwar
+    # inzwischen immer explizit hin; der Default hier muss trotzdem stimmen,
+    # damit von Hand geschriebene Szenen nicht als Wuerfel in RViz landen.
+    gtype = geom_el.get("type") or "sphere"
     rgba = _floats(geom_el.get("rgba"), (0.7, 0.7, 0.7, 1.0))
     attrs = {"contype": geom_el.get("contype"), "conaffinity": geom_el.get("conaffinity")}
     if _is_decorative(attrs) and not has_collision_body:
@@ -253,6 +281,7 @@ def _geom_spec(geom_el, meshes: dict, base_pos, base_quat, has_collision_body=Fa
         "rgba": list(rgba[:4]),
         "size": None,
         "mesh_basename": None,
+        "mesh_resource": None,
         "aabb_half": None,
     }
 
@@ -262,6 +291,7 @@ def _geom_spec(geom_el, meshes: dict, base_pos, base_quat, has_collision_body=Fa
         if info is None:
             return None
         spec["mesh_basename"] = info["basename"]
+        spec["mesh_resource"] = info["resource"]
         spec["size"] = list(info["scale"])  # MJCF-Mesh-Skalierung (fuers Rendering)
         local_half = _mesh_local_aabb_half(Path(info["file"]))
         if local_half is not None:
@@ -298,6 +328,7 @@ def _hull_box_specs(col_body, meshes: dict, base_name: str):
             "rgba": list(HULL_BOX_RGBA),
             "size": half,
             "mesh_basename": None,
+            "mesh_resource": None,
             "aabb_half": None,
         })
     return specs

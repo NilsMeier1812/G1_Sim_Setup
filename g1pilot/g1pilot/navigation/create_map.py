@@ -14,6 +14,11 @@ Sowohl Hindernisse ALS AUCH Greif-Objekte zaehlen hier als belegt: ein
 greifbares Objekt auf dem Boden ist BIS ZUM Greifen trotzdem ein Hindernis
 fuer die laufende Basis. Die Hindernis/Greif-Unterscheidung (Kollision OK vs.
 ausweichen) betrifft nur den ARM -- siehe ik_solver.py.
+
+Nur was in den Hoehenbereich des Roboters ragt (obstacle_min_z ..
+obstacle_max_z) wird gestempelt: eine Bodenplatte (CAD-Zelle), auf der der G1
+laeuft, oder eine Kabelpritsche ueber Kopf wuerden sonst die ganze Flaeche
+darunter sperren.
 """
 import rclpy
 from rclpy.node import Node
@@ -34,11 +39,17 @@ class SceneMapPublisher(Node):
         self.declare_parameter('frame_id', 'map')
         self.declare_parameter('markers_topic', '/scene_markers')
         self.declare_parameter('publish_rate_hz', 1.0)
+        # Hoehenband, in dem Objekte die Basis blockieren (m ueber Boden):
+        # darunter = begehbar (Bodenplatten, Kabelkanaele), darueber = Kopffreiheit.
+        self.declare_parameter('obstacle_min_z', 0.05)
+        self.declare_parameter('obstacle_max_z', 1.8)
 
         self.w = int(self.get_parameter('width').value)
         self.h = int(self.get_parameter('height').value)
         self.res = float(self.get_parameter('resolution').value)
         self.frame_id = self.get_parameter('frame_id').value
+        self.min_z = float(self.get_parameter('obstacle_min_z').value)
+        self.max_z = float(self.get_parameter('obstacle_max_z').value)
         self.ox = -(self.w * self.res) / 2.0
         self.oy = -(self.h * self.res) / 2.0
 
@@ -87,6 +98,9 @@ class SceneMapPublisher(Node):
             if not sm.is_collision_marker(marker):   # reine Anzeige (z.B. Optik-Mesh)
                 continue
             try:
+                z0, z1 = sm.vertical_range(marker)
+                if z1 < self.min_z or z0 > self.max_z:
+                    continue   # begehbar (flach) oder ueber Kopfhoehe
                 x, y, hx, hy = sm.footprint_xy(marker)
             except (AttributeError, ZeroDivisionError):
                 continue

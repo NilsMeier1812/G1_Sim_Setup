@@ -11,7 +11,10 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-VENV=".venv"
+# Ort des venv: Default .venv/ hier im Ordner. Das Docker-Image
+# (g1pilot/docker/Dockerfile.scene_editor) legt es nach /opt, damit es nicht im
+# gemounteten Repo landet.
+VENV="${SCENE_EDITOR_VENV:-.venv}"
 
 # mujoco-scene-editor 0.1.3 verlangt Python >=3.10,<3.13. Ubuntu 26.04 bringt
 # nur 3.14 mit -> passenden Interpreter suchen: $PYTHON, python3.12..3.10,
@@ -32,6 +35,7 @@ if [[ -z "$PY" ]]; then
   echo "  curl -LsSf https://astral.sh/uv/install.sh | sh" >&2
   echo "  ~/.local/bin/uv python install 3.12" >&2
   echo "  ./setup.sh" >&2
+  echo "Oder den Editor im Container nutzen:  cd g1pilot && make editor" >&2
   exit 1
 fi
 echo ">> Nutze $PY ($("$PY" --version 2>&1))"
@@ -60,8 +64,17 @@ echo ">> Erstelle virtualenv in $VENV ..."
 echo ">> Aktualisiere pip / setuptools / wheel ..."
 "$VENV/bin/pip" install --upgrade pip setuptools wheel
 
-echo ">> Installiere mujoco-scene-editor (+ yourdfpy) ... das dauert einen Moment."
+echo ">> Installiere mujoco-scene-editor (+ yourdfpy, + CAD-Import) ... das dauert einen Moment."
 "$VENV/bin/pip" install -r requirements.txt
+
+# CAD-Import pruefen (cadquery-ocp ist ein grosses Wheel; wenn es fehlt, soll
+# das hier auffallen und nicht erst beim Hochladen einer CAD-Datei).
+if "$VENV/bin/python" cad_import.py --check >/dev/null 2>&1; then
+  echo ">> CAD-Import (STEP/IGES) ist aktiv."
+else
+  echo ">> WARNUNG: CAD-Import inaktiv (cadquery-ocp fehlt)."
+  echo "   Nachinstallieren:  $VENV/bin/pip install cadquery-ocp coacd"
+fi
 
 # Persistente RoBits-Config (sonst meckert der Editor und nutzt /tmp)
 mkdir -p ".robits_config"

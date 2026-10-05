@@ -40,7 +40,7 @@ from pathlib import Path
 
 try:
     import tkinter as tk
-    from tkinter import ttk, messagebox, simpledialog
+    from tkinter import ttk, messagebox, simpledialog, filedialog
 except Exception as exc:  # pragma: no cover - nur wenn tkinter fehlt
     sys.stderr.write(
         "[g1_gui] Tkinter ist nicht verfuegbar (%s).\n"
@@ -58,6 +58,21 @@ SCENES_DIR = SCENE_DIR / "scenes"
 LAUNCH_SH = SCENE_DIR / "launch.sh"
 SETUP_SH = SCENE_DIR / "setup.sh"
 SCENE_VENV = SCENE_DIR / ".venv" / "bin" / "python"
+BUILD_ENV_PY = SCENE_DIR / "build_env_scene.py"
+EXPORT_DIR = SCENE_DIR / "export"          # Default-Ziel fuer Umgebungs-Zips
+
+# Umgebungen sind Ordner scenes/<name>/ (umgebung.xml + meshes/). Das Format
+# kennt genau EIN Modul (env_store.py, nur Standardbibliothek) - Editor,
+# Generator, launch.sh, start.sh und diese GUI benutzen es gemeinsam.
+sys.path.insert(0, str(SCENE_DIR))
+import env_store  # noqa: E402
+
+# Port des Editor-Webservers (viser). Muss zu run_editor.py/launch.sh passen.
+EDITOR_PORT = os.environ.get("SCENE_EDITOR_PORT", "8080")
+EDITOR_URL = f"http://127.0.0.1:{EDITOR_PORT}"
+
+# Label der "keine eigene Umgebung"-Auswahl (an mehreren Stellen gebraucht).
+DEFAULT_ENV_LABEL = "Standard — aktuelles Terrain (scene.xml)"
 
 # Dokumente, die aus dem Menue heraus geoeffnet werden koennen. Vollstaendige
 # Uebersicht: docs/README.md. Jedes Thema hat eine Anleitung (Anwender) und
@@ -114,11 +129,43 @@ def docker_ready() -> bool:
         return False
 
 
-def list_scenes() -> list[Path]:
-    """Alle Umgebungen aus scene_editor/scenes/*.xml (sortiert)."""
-    if not SCENES_DIR.is_dir():
-        return []
-    return sorted(p for p in SCENES_DIR.glob("*.xml") if p.is_file())
+def list_scenes() -> list:
+    """Alle brauchbaren Umgebungen (env_store.Env: .name, .xml, .folder)."""
+    return env_store.list_envs()
+
+
+def list_broken_scenes() -> list[tuple[Path, str]]:
+    """Eintraege in scenes/, die nicht als Umgebung taugen (+ Grund)."""
+    return env_store.scan()[1]
+
+
+def scene_python() -> str:
+    """Python fuer die Szenen-Skripte: bevorzugt das Editor-venv (hat mujoco und
+    kann die kombinierte Szene damit vorab pruefen), sonst der System-Python."""
+    if SCENE_VENV.exists():
+        return str(SCENE_VENV)
+    return sys.executable or "python3"
+
+
+def build_env_scene(env_name: str, inspire: bool) -> tuple[bool, str]:
+    """Kombinierte Szene (G1 + Umgebung) erzeugen. -> (ok, Ausgabe)
+
+    Genau das macht start.sh vor dem Container-Start auch; wir ziehen es in die
+    GUI vor, damit ein Fehler in der Umgebung SOFORT sichtbar wird statt erst
+    als stiller Rueckfall auf das Standard-Terrain.
+    """
+    if not BUILD_ENV_PY.is_file():
+        return False, f"{BUILD_ENV_PY} fehlt."
+    try:
+        r = subprocess.run(
+            [scene_python(), str(BUILD_ENV_PY), "--env", env_name,
+             "--inspire", "1" if inspire else "0"],
+            capture_output=True, text=True, timeout=180, cwd=str(SCENE_DIR),
+        )
+    except Exception as exc:
+        return False, f"{type(exc).__name__}: {exc}"
+    out = (r.stdout or "") + (r.stderr or "")
+    return r.returncode == 0, out.strip()
 
 
 def scene_editor_ready() -> bool:
@@ -626,19 +673,22 @@ class SimFrame(tk.Frame):
         self.v_open_guis = tk.BooleanVar(value=True)
         self.v_nav = tk.BooleanVar(value=False)
         self.v_rebuild = tk.BooleanVar(value=False)
-        self.v_env = tk.StringVar(value="Standard — aktuelles Terrain (scene.xml)")
+        self.v_env = tk.StringVar(value=DEFAULT_ENV_LABEL)
         self.v_rt = tk.StringVar(value="1.0")
 
         s = section(b, "Umgebung (G1 bleibt gleich, nur die Welt wechselt)")
-        self._scene_paths: dict[str, str] = {"Standard — aktuelles Terrain (scene.xml)": ""}
-        names = ["Standard — aktuelles Terrain (scene.xml)"]
-        for p in list_scenes():
-            names.append(p.stem)
-            self._scene_paths[p.stem] = p.stem
-        ttk.Combobox(s, textvariable=self.v_env, values=names,
-                     state="readonly", width=44).pack(anchor="w", pady=2)
-        tk.Label(s, text="Umgebungen anlegen/bearbeiten: Menue -> 'Umgebungen bearbeiten'.",
-                 bg=CARD, fg=MUTED, font=("TkDefaultFont", 9)).pack(anchor="w", pady=(2, 0))
+        row = tk.Frame(s, bg=CARD)
+        row.pack(fill="x", pady=2)
+        self._env_box = ttk.Combobox(row, textvariable=self.v_env,
+                                     state="readonly", width=44)
+        self._env_box.pack(side="left")
+        tk.Button(row, text="↻", command=self._reload_envs, bg=BG, fg=FG,
+                  relief="flat", padx=8).pack(side="left", padx=6)
+        self._env_hint = tk.Label(
+            s, text="", bg=CARD, fg=MUTED, font=("TkDefaultFont", 9),
+            justify="left", wraplength=560)
+        self._env_hint.pack(anchor="w", pady=(2, 0))
+        self._reload_envs()
 
         s = section(b, "Visualisierung & Features")
         toggle_row(s, "RViz mitstarten", self.v_rviz,
@@ -659,6 +709,24 @@ class SimFrame(tk.Frame):
         toggle_row(s, "Docker-Images vor dem Start neu bauen (--build)", self.v_rebuild,
                    "nach Code-/Dockerfile-Aenderungen")
 
+    def _reload_envs(self) -> None:
+        """Umgebungsliste frisch aus scenes/ ziehen (Editor laeuft ggf. parallel)."""
+        self._scene_paths: dict[str, str] = {DEFAULT_ENV_LABEL: ""}
+        names = [DEFAULT_ENV_LABEL]
+        for env in list_scenes():
+            names.append(env.name)
+            self._scene_paths[env.name] = env.name
+        self._env_box.configure(values=names)
+        if self.v_env.get() not in names:
+            self.v_env.set(DEFAULT_ENV_LABEL)
+
+        hint = "Umgebungen anlegen/bearbeiten: Menue -> 'Umgebungen bearbeiten'."
+        broken = list_broken_scenes()
+        if broken:
+            hint += ("\nNicht verwendbar: "
+                     + ", ".join(f"{p.name} ({why})" for p, why in broken))
+        self._env_hint.configure(text=hint)
+
     def _sync_hands(self) -> None:
         state = "normal" if self.v_hands.get() else "disabled"
         for child in self._open_row.winfo_children():
@@ -667,14 +735,38 @@ class SimFrame(tk.Frame):
             except tk.TclError:
                 pass
 
+    def _prepare_env(self, name: str) -> bool:
+        """Kombinierte Szene vor dem Start erzeugen und Fehler klar melden."""
+        if env_store.find(name) is None:
+            messagebox.showerror(
+                "Umgebung weg",
+                f"Die Umgebung '{name}' gibt es nicht mehr in\n{SCENES_DIR}.\n\n"
+                "Liste mit ↻ aktualisieren.", parent=self)
+            self._reload_envs()
+            return False
+        ok, out = build_env_scene(name, self.v_hands.get())
+        if not ok:
+            messagebox.showerror(
+                "Umgebung laesst sich nicht laden",
+                f"Die Umgebung '{name}' konnte nicht mit dem G1 kombiniert werden:\n\n"
+                f"{out or '(keine Meldung)'}\n\n"
+                "Entweder die Umgebung im Editor korrigieren oder 'Standard' waehlen.",
+                parent=self)
+            return False
+        return True
+
     def _start(self) -> None:
+        env_name = self._scene_paths.get(self.v_env.get(), "")
+        if env_name and not self._prepare_env(env_name):
+            return
+
         env = os.environ.copy()
         env["G1_MODE"] = "sim"
         env["USE_RVIZ"] = "true" if self.v_rviz.get() else "false"
         env["G1_INSPIRE_HANDS"] = "1" if self.v_hands.get() else "0"
         env["OPEN_GUIS"] = "true" if (self.v_hands.get() and self.v_open_guis.get()) else "false"
         env["G1_ENABLE_NAV"] = "1" if self.v_nav.get() else "0"
-        env["G1_ENV"] = self._scene_paths.get(self.v_env.get(), "")
+        env["G1_ENV"] = env_name
         rt = self.v_rt.get().strip() or "1.0"
         try:
             float(rt)
@@ -855,8 +947,8 @@ class SceneFrame(tk.Frame):
         super().__init__(parent, bg=BG)
         self.app = app
         nav_header(self, app, "Umgebungen bearbeiten",
-                   "Szenen aus scene_editor/scenes/ — dieselben, die beim Sim-Start "
-                   "waehlbar sind.")
+                   "Umgebungen aus scene_editor/scenes/<name>/ — dieselben, die beim "
+                   "Sim-Start waehlbar sind.")
         body = ScrollableFrame(self)
         body.pack(fill="both", expand=True)
         self._body = body.body
@@ -889,6 +981,11 @@ class SceneFrame(tk.Frame):
         self.listbox.configure(yscrollcommand=sb.set)
         self.listbox.pack(side="left", fill="both", expand=True)
         sb.pack(side="right", fill="y")
+
+        self._problem_label = tk.Label(
+            s, text="", bg=CARD, fg=AMBER, font=("TkDefaultFont", 9),
+            justify="left", wraplength=560)
+        self._problem_label.pack(anchor="w", pady=(4, 0))
         self._reload_scenes()
 
         toggle_row(s, "Beim Ansehen 'mit G1' die Inspire-Haende laden", self.v_hands)
@@ -905,9 +1002,21 @@ class SceneFrame(tk.Frame):
         primary_button(grid, "🤖  Mit G1 ansehen",
                        lambda: self._run_scene("with-g1"), GREEN).grid(
             row=1, column=0, padx=4, pady=4, sticky="ew")
-        tk.Button(grid, text="↻  Liste aktualisieren", command=self._reload_scenes,
+        tk.Button(grid, text="✔  Auf Ladbarkeit pruefen", command=self._check_scene,
                   bg=CARD, fg=FG, relief="flat", padx=10, pady=8).grid(
             row=1, column=1, padx=4, pady=4, sticky="ew")
+        tk.Button(grid, text="↻  Liste aktualisieren", command=self._reload_scenes,
+                  bg=CARD, fg=FG, relief="flat", padx=10, pady=8).grid(
+            row=2, column=0, padx=4, pady=4, sticky="ew")
+        tk.Button(grid, text="🗑  Umgebung loeschen", command=self._delete_scene,
+                  bg=CARD, fg=RED, relief="flat", padx=10, pady=8).grid(
+            row=2, column=1, padx=4, pady=4, sticky="ew")
+        tk.Button(grid, text="📦  Als Zip exportieren", command=self._pack_scene,
+                  bg=CARD, fg=FG, relief="flat", padx=10, pady=8).grid(
+            row=3, column=0, padx=4, pady=4, sticky="ew")
+        tk.Button(grid, text="📥  Zip einspielen", command=self._unpack_scene,
+                  bg=CARD, fg=FG, relief="flat", padx=10, pady=8).grid(
+            row=3, column=1, padx=4, pady=4, sticky="ew")
         grid.columnconfigure(0, weight=1)
         grid.columnconfigure(1, weight=1)
 
@@ -919,32 +1028,172 @@ class SceneFrame(tk.Frame):
                        ACCENT).pack(side="left", padx=(0, 6))
         tk.Button(newrow, text="✨  Aus Text-Prompt generieren", command=self._run_prompt,
                   bg=CARD, fg=FG, relief="flat", padx=12, pady=8).pack(side="left")
-        tk.Label(new, text="Der Editor oeffnet einen lokalen Webserver (http://127.0.0.1:8080) "
-                           "im Browser. Export landet automatisch in scenes/.",
+        tk.Label(new, text=(
+                     f"Der Editor oeffnet einen lokalen Webserver ({EDITOR_URL}) im Browser. "
+                     "Zum Speichern oben im Editor unter 'Umgebung speichern' nur den NAMEN "
+                     "eintippen — die Umgebung landet als Ordner in scenes/<name>/ (mit allen "
+                     "Meshes) und steht danach beim Sim-Start zur Auswahl (Liste hier mit ↻ "
+                     "auffrischen). Weitergeben: 📦 Zip exportieren / 📥 Zip einspielen."),
                  bg=CARD, fg=MUTED, font=("TkDefaultFont", 9),
                  wraplength=560, justify="left").pack(anchor="w", pady=(6, 0))
 
     def _reload_scenes(self) -> None:
+        """Liste neu aufbauen und die vorherige Auswahl beibehalten."""
+        previous = None
+        scenes = getattr(self, "_scenes", None)
+        sel = self.listbox.curselection() if scenes else ()
+        if scenes and sel:
+            previous = scenes[sel[0]].name
+
+        self.listbox.configure(state="normal")
         self.listbox.delete(0, "end")
         self._scenes = list_scenes()
         if not self._scenes:
             self.listbox.insert("end", "(noch keine Umgebungen — 'Leere Umgebung' anlegen)")
             self.listbox.configure(state="disabled")
-            return
-        self.listbox.configure(state="normal")
-        for p in self._scenes:
-            self.listbox.insert("end", p.stem)
-        self.listbox.selection_set(0)
+        else:
+            for env in self._scenes:
+                label = env.name + ("   (altes Format)" if env.legacy else "")
+                self.listbox.insert("end", label)
+            idx = 0
+            for i, env in enumerate(self._scenes):
+                if env.name == previous:
+                    idx = i
+                    break
+            self.listbox.selection_set(idx)
+            self.listbox.see(idx)
+
+        broken = list_broken_scenes()
+        if broken:
+            self._problem_label.configure(
+                text="Nicht als Umgebung verwendbar (werden ausgeblendet):\n"
+                     + "\n".join(f"   • {p.name} — {why}" for p, why in broken))
+        else:
+            self._problem_label.configure(text="")
 
     def _selected_scene(self):
         if not getattr(self, "_scenes", None):
+            messagebox.showinfo(
+                "Keine Umgebung da",
+                "In scene_editor/scenes/ liegt noch keine Umgebung.\n"
+                "Unten mit '＋ Leere Umgebung im Editor' eine anlegen.", parent=self)
             return None
         sel = self.listbox.curselection()
         if not sel:
             messagebox.showinfo("Keine Auswahl", "Bitte zuerst eine Umgebung waehlen.",
                                 parent=self)
             return None
-        return self._scenes[sel[0]]
+        scene = self._scenes[sel[0]]
+        if not scene.xml.is_file():
+            messagebox.showerror("Umgebung weg",
+                                 f"'{scene.name}' gibt es nicht mehr.", parent=self)
+            self._reload_scenes()
+            return None
+        return scene
+
+    def _check_scene(self) -> None:
+        """Umgebung mit dem G1 kombinieren, ohne etwas zu starten."""
+        scene = self._selected_scene()
+        if scene is None:
+            return
+        ok, out = build_env_scene(scene.name, self.v_hands.get())
+        missing = [] if scene.legacy else env_store.containment_problems(scene.xml)
+        if ok and not missing:
+            messagebox.showinfo(
+                "Umgebung in Ordnung",
+                f"'{scene.name}' laesst sich mit dem G1 kombinieren und laden.\n\n"
+                f"{out}", parent=self)
+        elif ok:
+            messagebox.showwarning(
+                "Umgebung laedt, ist aber nicht eigenstaendig",
+                f"'{scene.name}' laedt, braucht aber Dateien ausserhalb ihres Ordners "
+                "(Zip/Weitergabe wuerde nicht funktionieren):\n\n"
+                + "\n".join(f"• {m}" for m in missing)
+                + "\n\nEinmal im Editor oeffnen und speichern behebt das.", parent=self)
+        else:
+            messagebox.showerror(
+                "Umgebung fehlerhaft",
+                f"'{scene.name}' laesst sich nicht laden:\n\n{out or '(keine Meldung)'}",
+                parent=self)
+
+    def _delete_scene(self) -> None:
+        scene = self._selected_scene()
+        if scene is None:
+            return
+        what = scene.xml if scene.legacy else scene.folder
+        if not messagebox.askyesno(
+                "Umgebung loeschen",
+                f"'{scene.name}' wirklich loeschen?\n\n{what}\n"
+                + ("(die zugehoerige .json-Datei wird mitgeloescht)" if scene.legacy
+                   else "(der ganze Ordner samt Meshes)"), parent=self):
+            return
+        try:
+            if scene.legacy:
+                scene.xml.unlink()
+                sidecar = scene.xml.with_suffix(".json")
+                if sidecar.is_file():
+                    sidecar.unlink()
+            else:
+                shutil.rmtree(scene.folder)
+        except OSError as exc:
+            messagebox.showerror("Loeschen fehlgeschlagen", str(exc), parent=self)
+            return
+        self._reload_scenes()
+
+    def _pack_scene(self) -> None:
+        """Umgebung als Zip speichern (zum Weitergeben/Sichern)."""
+        scene = self._selected_scene()
+        if scene is None:
+            return
+        EXPORT_DIR.mkdir(parents=True, exist_ok=True)
+        target = filedialog.asksaveasfilename(
+            parent=self, title=f"'{scene.name}' als Zip speichern",
+            initialdir=str(EXPORT_DIR), initialfile=f"{scene.name}.zip",
+            defaultextension=".zip", filetypes=[("Zip", "*.zip")])
+        if not target:
+            return
+        try:
+            if scene.legacy:
+                env_store.migrate(scene)
+            out = env_store.pack(scene.name, target)
+        except (env_store.EnvError, OSError) as exc:
+            messagebox.showerror("Export fehlgeschlagen", str(exc), parent=self)
+            return
+        self._reload_scenes()
+        messagebox.showinfo(
+            "Umgebung exportiert",
+            f"{out}\n({out.stat().st_size / 1e6:.1f} MB)\n\nAuf dem anderen Rechner hier "
+            "mit '📥 Zip einspielen' oder  ./launch.sh unpack <zip>.", parent=self)
+
+    def _unpack_scene(self) -> None:
+        """Umgebung aus einem Zip einspielen."""
+        path = filedialog.askopenfilename(
+            parent=self, title="Umgebung (Zip) einspielen",
+            filetypes=[("Zip", "*.zip"), ("Alle Dateien", "*")])
+        if not path:
+            return
+        try:
+            env = env_store.unpack(path)
+        except env_store.EnvError as exc:
+            if "gibt es schon" not in str(exc):
+                messagebox.showerror("Einspielen fehlgeschlagen", str(exc), parent=self)
+                return
+            if not messagebox.askyesno(
+                    "Umgebung ersetzen?",
+                    f"{exc}\n\nVorhandene Umgebung durch das Zip ersetzen?", parent=self):
+                return
+            try:
+                env = env_store.unpack(path, force=True)
+            except (env_store.EnvError, OSError) as exc2:
+                messagebox.showerror("Einspielen fehlgeschlagen", str(exc2), parent=self)
+                return
+        except OSError as exc:
+            messagebox.showerror("Einspielen fehlgeschlagen", str(exc), parent=self)
+            return
+        self._reload_scenes()
+        messagebox.showinfo("Umgebung eingespielt",
+                            f"'{env.name}' liegt jetzt in {env.folder}\n"
+                            "und ist beim Sim-Start waehlbar.", parent=self)
 
     def _run_scene(self, cmd: str) -> None:
         scene = self._selected_scene()
@@ -955,7 +1204,7 @@ class SceneFrame(tk.Frame):
         title = {"edit": "Editor", "view": "Viewer", "with-g1": "Viewer + G1"}[cmd]
         # 'edit' startet den Web-Editor -> Browser oeffnen; view/with-g1 sind
         # native MuJoCo-Fenster.
-        self._run_cmd([cmd, str(scene)], f"{title}: {scene.stem}", env=env,
+        self._run_cmd([cmd, str(scene.xml)], f"{title}: {scene.name}", env=env,
                       browser=(cmd == "edit"))
 
     def _run_prompt(self) -> None:
@@ -963,17 +1212,27 @@ class SceneFrame(tk.Frame):
             "Umgebung aus Text",
             "Beschreibe die Umgebung (Englisch funktioniert am besten):",
             parent=self)
-        if not text:
+        if not text or not text.strip():
             return
-        self._run_cmd(["prompt", text], "Umgebung generieren", browser=True)
+        if not os.environ.get("OPENAI_API_KEY"):
+            messagebox.showerror(
+                "OpenAI-Key fehlt",
+                "Umgebungen aus Text brauchen einen OpenAI-API-Key.\n\n"
+                "Vor dem Start setzen:\n    export OPENAI_API_KEY=sk-...\n\n"
+                "Ohne Key: '＋ Leere Umgebung im Editor' und die Objekte selbst setzen.",
+                parent=self)
+            return
+        self._run_cmd(["prompt", text.strip()], "Umgebung generieren", browser=True)
 
     def _run_cmd(self, args: list[str], title: str, env: dict | None = None,
                  browser: bool = False) -> None:
+        env = env or os.environ.copy()
+        env.setdefault("SCENE_EDITOR_PORT", EDITOR_PORT)
         self.app.start_process(f"Scene-Editor — {title}",
                                ["bash", str(LAUNCH_SH), *args],
-                               cwd=SCENE_DIR, env=env or os.environ.copy(),
+                               cwd=SCENE_DIR, env=env,
                                stop_note="Beendet den Editor/Viewer-Prozess.",
-                               browser_url="http://127.0.0.1:8080" if browser else None)
+                               browser_url=EDITOR_URL if browser else None)
 
 
 # ════════════════════════════════════════════════════════════════════════

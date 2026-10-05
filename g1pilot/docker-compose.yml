@@ -103,12 +103,13 @@ services:
     volumes:
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
       - .:/ros2_ws/src/g1pilot:rw
-      # Scene-Editor-Meshes read-only mounten, damit RViz MESH_RESOURCE-Marker
+      # Scene Editor read-only mounten, damit RViz MESH_RESOURCE-Marker
       # (/scene_markers, siehe scene_bridge.py) tatsaechlich laden kann -- der
       # g1pilot-Container hat sonst KEINEN Zugriff auf unitree_mujoco/ (das
-      # liegt nur im mujoco-sim-Container). Fixer Pfad, den scene_bridge.py als
-      # mesh_resource_prefix-Default erwartet.
-      - ../unitree_mujoco/scene_editor/meshes:/scene_meshes:ro
+      # liegt nur im mujoco-sim-Container). Ganzer Ordner, weil Umgebungen ihre
+      # Meshes in scenes/<name>/meshes/ mitbringen. Fixer Pfad, den
+      # scene_bridge.py als mesh_resource_prefix-Default erwartet.
+      - ../unitree_mujoco/scene_editor:/scene_editor:ro
     command: >
       bash -c "cd /ros2_ws &&
                source /opt/ros/humble/setup.bash &&
@@ -201,3 +202,46 @@ services:
                ros2 launch g1pilot bringup_launcher.launch.py
                  use_robot:=true
                  interface:=${ROBOT_INTERFACE:-eth0}"
+
+  # ══════════════════════════════════════════════════════════════════
+  # SCENE EDITOR (nur bei --profile editor)
+  # ══════════════════════════════════════════════════════════════════
+
+  scene-editor:
+    # ── Umgebungen bauen + CAD-Import im Browser (http://127.0.0.1:8080) ──
+    # Fuer Windows/Docker Desktop (oder Linux ohne passendes Host-Python).
+    # Unter Linux geht weiterhin der Host-Weg: scene_editor/setup.sh + launch.sh.
+    #   make editor                           -> Menue von launch.sh
+    #   make editor ARGS="new"                -> direkt leerer Editor
+    #   make editor ARGS="import /import/..." -> CAD-Datei als Umgebung
+    profiles: ["editor"]
+    build:
+      context: ../unitree_mujoco/scene_editor
+      dockerfile: ../../g1pilot/docker/Dockerfile.scene_editor
+    image: g1pilot-scene-editor:v1.0
+    # Eigene Nutzer-ID, damit gespeicherte Umgebungen auf einem Linux-Host
+    # nicht root gehoeren (unter Docker Desktop/Windows egal).
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
+    environment:
+      - SCENE_EDITOR_PORT=8080
+      - G1_INSPIRE_HANDS=${G1_INSPIRE_HANDS:-0}
+    ports:
+      # Nur lokal erreichbar: der Editor kann Dateien im Repo schreiben.
+      - "127.0.0.1:${SCENE_EDITOR_PORT:-8080}:8080"
+    volumes:
+      # Code, scenes/ und meshes/ live aus dem Repo (Ergebnisse landen dort),
+      # unitree_robots/ fuer build_env_scene.py (G1 + Umgebung kombinieren).
+      - ../unitree_mujoco:/unitree_mujoco:rw
+      # Ordner mit CAD-Dateien fuer './launch.sh import /import/<datei>'
+      # (Default: Repo-Wurzel). Im Browser geht der Upload-Knopf ohnehin.
+      - ${SCENE_IMPORT_DIR:-..}:/import:ro
+      # Objaverse-Katalog & Caches bleiben ueber Neustarts erhalten.
+      - scene-editor-home:/home/editor
+    working_dir: /unitree_mujoco/scene_editor
+    command: ["bash", "launch.sh"]
+    stdin_open: true
+    tty: true
+    restart: "no"
+
+volumes:
+  scene-editor-home:

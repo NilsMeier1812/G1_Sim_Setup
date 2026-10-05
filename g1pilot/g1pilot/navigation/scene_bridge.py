@@ -16,8 +16,13 @@ Warum UDP statt eines ROS-Topics auf der Sim-Seite? Der MuJoCo-Container hat
 KEIN ROS (siehe push_listener.py/grasp_box.py fuer dasselbe Muster in der
 Gegenrichtung). Beide Container laufen mit network_mode: host -> Loopback
 verbindet sie ohne DDS/ROS.
+
+Grosse Umgebungen (CAD-Zellen mit Hunderten Teilen) kommen in mehreren
+Datagrammen an; scene_protocol.SnapshotAssembler setzt sie zusammen.
+Veroeffentlicht wird nur, wenn sich etwas geaendert hat (plus ein Keepalive
+alle `keepalive_s` Sekunden) - sonst rechnen IK und Nav-Karte bei 700 Teilen
+10x pro Sekunde dieselben Marker um.
 """
-import json
 import socket
 import threading
 import time
@@ -29,6 +34,7 @@ from std_msgs.msg import Bool
 from visualization_msgs.msg import Marker, MarkerArray
 
 from g1pilot.navigation import scene_markers as sm
+from g1pilot.navigation.scene_protocol import SnapshotAssembler
 
 
 class SceneBridge(Node):
@@ -40,14 +46,18 @@ class SceneBridge(Node):
         self.declare_parameter("publish_rate_hz", 10.0)
         self.declare_parameter("frame_id", "map")
         # Fixer, gut bekannter In-Container-Pfad fuer die Mesh-Dateien (siehe
-        # docker-compose.yml: scene_editor/meshes wird read-only genau hierhin
-        # gemountet). RViz laedt MESH_RESOURCE-Marker darueber.
-        self.declare_parameter("mesh_resource_prefix", "file:///scene_meshes/")
+        # docker-compose.yml: unitree_mujoco/scene_editor wird read-only genau
+        # hierhin gemountet; die Sim schickt Pfade relativ dazu, z.B.
+        # scenes/<name>/meshes/teil.stl). RViz laedt MESH_RESOURCE-Marker darueber.
+        self.declare_parameter("mesh_resource_prefix", "file:///scene_editor/")
+        # Auch ohne Aenderung spaetestens so oft neu veroeffentlichen (s).
+        self.declare_parameter("keepalive_s", 2.0)
 
         self.udp_host = str(self.get_parameter("udp_host").value)
         self.udp_port = int(self.get_parameter("udp_port").value)
         self.frame_id = str(self.get_parameter("frame_id").value)
         self.mesh_prefix = str(self.get_parameter("mesh_resource_prefix").value)
+        self.keepalive_s = float(self.get_parameter("keepalive_s").value)
         rate = float(self.get_parameter("publish_rate_hz").value)
 
         qos = QoSProfile(depth=1)
@@ -55,8 +65,10 @@ class SceneBridge(Node):
         self.pub_markers = self.create_publisher(MarkerArray, "/scene_markers", qos)
 
         self._lock = threading.Lock()
-        self._snapshot = None       # letztes dekodiertes JSON-Dict
+        self._assembler = SnapshotAssembler()
         self._last_rx_time = 0.0
+        self._published_version = -1
+        self._last_publish_time = 0.0
         self._published_ids = set()  # fuer sauberes DELETE verschwundener Objekte
 
         self._sock = None
@@ -105,12 +117,8 @@ class SceneBridge(Node):
                 data, _ = self._sock.recvfrom(65536)
             except OSError:
                 break
-            try:
-                snapshot = json.loads(data.decode("utf-8"))
-            except (ValueError, UnicodeDecodeError):
-                continue
             with self._lock:
-                self._snapshot = snapshot
+                self._assembler.feed(data)
                 self._last_rx_time = time.time()
 
     # ── Marker-Aufbau ────────────────────────────────────────────────────
@@ -149,11 +157,17 @@ class SceneBridge(Node):
 
     def _publish(self):
         with self._lock:
-            snapshot = self._snapshot
-        if snapshot is None:
-            return
+            if not self._assembler.ready():
+                return
+            version = self._assembler.version
+            now = time.time()
+            if (version == self._published_version
+                    and now - self._last_publish_time < self.keepalive_s):
+                return
+            objs = self._assembler.objects()
+        self._published_version = version
+        self._last_publish_time = now
 
-        objs = list(snapshot.get("obstacles", [])) + list(snapshot.get("grasp", []))
         array = MarkerArray()
         seen_ids = set()
         for obj in objs:

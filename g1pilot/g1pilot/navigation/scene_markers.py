@@ -170,6 +170,25 @@ def footprint_xy(marker):
     return marker.pose.position.x, marker.pose.position.y, hx, hy
 
 
+def vertical_range(marker):
+    """Welt-Z-Bereich (z_min, z_max) eines Markers (konservative Box)."""
+    q = marker.pose.orientation
+    hz = world_half_extents((q.w, q.x, q.y, q.z), local_half_extents_from_marker(marker))[2]
+    z = marker.pose.position.z
+    return z - hz, z + hz
+
+
+def world_half_extents(quat_wxyz, local_half):
+    """Welt-achsenparallele Halbextents (hx, hy, hz) einer gedrehten Box."""
+    w, x, y, z = quat_wxyz
+    R = (
+        (1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)),
+        (2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)),
+        (2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)),
+    )
+    return tuple(sum(abs(R[i][k]) * local_half[k] for k in range(3)) for i in range(3))
+
+
 def world_xy_half_extent(quat_wxyz, local_half):
     """Welt-achsenparallele XY-Halbextents einer (evtl. gedrehten) lokalen Box
     -- konservative AABB-Naeherung (siehe g1pilot/docs/51_navigation_technik.md, Mesh-

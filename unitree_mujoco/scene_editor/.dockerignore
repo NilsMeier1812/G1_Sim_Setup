@@ -1,0 +1,9 @@
+# Build-Kontext fuer g1pilot/docker/Dockerfile.scene_editor: das Image braucht
+# nur requirements.txt + setup.sh + cad_import.py + mesh_utils.py. Der Rest
+# (Code, Szenen, Meshes) wird zur Laufzeit gemountet.
+.venv/
+.robits_config/
+meshes/
+scenes/
+__pycache__/
+*.pyc

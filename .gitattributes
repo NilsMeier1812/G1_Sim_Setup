@@ -1,0 +1,19 @@
+# Skripte und Build-Dateien laufen in Linux-Containern - auch unter Windows
+# (Docker Desktop mountet das Repo direkt). Mit Windows-Zeilenenden (CRLF)
+# bricht Bash dort ab ("set: pipefail: invalid option name", "$'\r': command
+# not found"). Darum im Arbeitsverzeichnis immer LF, egal wie core.autocrlf
+# gesetzt ist.
+*.sh          text eol=lf
+*.py          text eol=lf
+*.yml         text eol=lf
+*.yaml        text eol=lf
+Makefile      text eol=lf
+Dockerfile*   text eol=lf
+.dockerignore text eol=lf
+
+# Meshes sind Binaerdateien - nie Zeilenenden umwandeln. (Eine STL mit
+# Text-Kopf kann Git sonst fuer Text halten und beim Einchecken beschaedigen.)
+*.stl         binary
+*.STL         binary
+*.msh         binary
+*.glb         binary

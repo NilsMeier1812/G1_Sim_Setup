@@ -9,6 +9,7 @@ wollen. Für die Bedienung siehe
 | Datei | Rolle |
 |---|---|
 | `g1pilot/navigation/scene_bridge.py` | Umgebungsobjekte (Sim, per UDP) → `/scene_markers` |
+| `g1pilot/navigation/scene_protocol.py` | setzt die in UDP-Pakete geteilten Szenen-Snapshots zusammen (ohne ROS testbar) |
 | `g1pilot/navigation/create_map.py` | `/scene_markers` → 2D-Belegungskarte `/map` |
 | `g1pilot/navigation/dijkstra_planner.py` | globaler Pfadplaner |
 | `g1pilot/navigation/nav2point.py` | Pure-Pursuit-Waypoint-Follower |
@@ -64,6 +65,17 @@ Abnehmer sofort den letzten Stand bekommt. Grund für UDP statt ROS-Topic:
 der MuJoCo-Container hat kein ROS; beide Container laufen mit
 `network_mode: host`, Loopback verbindet sie ohne DDS/ROS.
 
+Ein UDP-Datagramm fasst höchstens ~64 KB — eine CAD-Umgebung mit Hunderten
+Teilen ist deutlich größer (700 Teile ≈ 220 KB). Der Sender teilt jede Liste
+deshalb in Pakete ≤ 48 KB (Protokoll v2: `kind`, `gen`, `seq`, `part`,
+`parts`), `scene_protocol.SnapshotAssembler` setzt sie wieder zusammen und
+übernimmt eine Liste erst, wenn **alle** Teile da sind. Statische Hindernisse
+kommen 1×/s, greifbare Objekte mit Live-Pose 10×/s. `scene_bridge`
+veröffentlicht nur bei Änderungen (plus Keepalive `keepalive_s`, Default 2 s),
+damit IK und Karte nicht 10×/s Hunderte Marker umrechnen. Mesh-Marker
+verweisen auf den Pfad unter `scene_editor/meshes/` (z. B.
+`file:///scene_editor/scenes/<name>/meshes/<teil>.stl`; der ROS-Container mountet dafür `unitree_mujoco/scene_editor` read-only).
+
 `/scene_markers` ist das **eine geteilte Weltmodell**:
 
 - RViz zeigt es direkt an.
@@ -78,6 +90,11 @@ Greif-Objekte — ein greifbares Objekt am Boden ist bis zum Greifen trotzdem
 ein Hindernis für die laufende Basis) in eine `OccupancyGrid` (`/map`,
 Default 100×100 Zellen à 0,1 m, zentriert im Ursprung). Auf echter Hardware
 ohne entsprechendes Setup bleibt die Karte leer (kein `/scene_markers`-Sender).
+
+Gestempelt wird nur, was in den Höhenbereich des Roboters ragt
+(`obstacle_min_z` 0,05 m … `obstacle_max_z` 1,8 m): eine Bodenplatte, auf der
+der G1 läuft, oder eine Kabelpritsche über Kopf sperren sonst die ganze Fläche
+darunter (typisch bei importierten CAD-Zellen).
 
 ### `dijkstra_planner`
 

@@ -13,3 +13,29 @@ MUJOCO_LOG.TXT
 
 # Kollisions-Zerlegung (von build_env_scene.py erzeugt, wird bei Bedarf neu gebaut)
 meshes/.collision/
+
+# aus meshes/*.step automatisch erzeugte STLs (werden beim Import neu gebaut)
+meshes/sample_bracket.stl
+
+# Merker fuer STEP-Dateien, aus denen kein MuJoCo-taugliches STL wird
+meshes/.*.unconvertible
+
+# Altfall: build_env_scene.py kopiert Meshes, die eine (alte) Umgebung von
+# ausserhalb des Repos referenziert, hierher. Neue Umgebungen bringen alles in
+# ihrem Ordner scenes/<name>/meshes/ mit.
+meshes/imported/
+
+# Zwischenablage fuer CAD-Importe im Editor (cad_import.py). Was davon in einer
+# Umgebung benutzt wird, kopiert der Editor beim Speichern nach
+# scenes/<name>/meshes/ - und DAS wird mit eingecheckt.
+meshes/cad/
+
+# Im Editor hochgeladene CAD-Quelldateien
+meshes/uploads/
+
+# Umgebungs-Zips (./launch.sh pack, GUI 'Als Zip exportieren')
+export/
+
+# Zwischenstaende von Migration/Entpacken/Import (werden danach umbenannt)
+scenes/.*/
+scenes/**/*.tmp

@@ -1,0 +1,52 @@
+# ══════════════════════════════════════════════════════════════════════
+# Scene Editor (Umgebungen bauen, CAD-Import) als Container.
+#
+# Gedacht fuer Rechner ohne passendes Linux-Python auf dem Host - v.a.
+# Windows mit Docker Desktop/WSL2. Unter Linux geht weiterhin der
+# Host-Weg (unitree_mujoco/scene_editor/setup.sh + launch.sh).
+#
+# Das Image fuehrt beim Bauen genau setup.sh aus (venv nach /opt, damit es
+# nicht im gemounteten Repo landet). Der Code selbst wird zur Laufzeit aus
+# dem Repo gemountet (docker-compose.yml, Profil "editor") - Aenderungen an
+# run_editor.py/cad_import.py wirken also ohne Neubau; nur requirements.txt
+# braucht einen Neubau (make build-editor).
+#
+# Build-Kontext: unitree_mujoco/scene_editor/ (siehe dort .dockerignore)
+# ══════════════════════════════════════════════════════════════════════
+# 3.12: mujoco-scene-editor verlangt Python < 3.13.
+FROM python:3.12-slim-bookworm
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PYTHONUNBUFFERED=1
+
+# Laufzeit-Bibliotheken: OpenCascade (cadquery-ocp) und open3d (von robits)
+# brauchen OpenGL-/X11-Grundbibliotheken, auch ohne Bildschirm.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libgl1 libglu1-mesa libegl1 libgomp1 libglib2.0-0 \
+        libx11-6 libxext6 libxrender1 libxi6 libsm6 libxkbcommon0 \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV SCENE_EDITOR_VENV=/opt/scene_editor_venv
+
+# setup.sh braucht requirements.txt und fuer die Abschlusspruefung cad_import.py
+# (+ mesh_utils.py). Nur diese Dateien kopieren -> Code-Aenderungen machen den
+# (langsamen) Paket-Layer nicht ungueltig.
+COPY requirements.txt setup.sh cad_import.py mesh_utils.py /build/
+RUN bash /build/setup.sh \
+ && "$SCENE_EDITOR_VENV/bin/python" /build/cad_import.py --check \
+ && rm -rf /build
+
+# Webserver im Container auf allen Interfaces (docker-compose veroeffentlicht
+# ihn trotzdem nur auf 127.0.0.1 des Rechners, siehe run_editor.py).
+ENV SCENE_EDITOR_HOST=0.0.0.0 \
+    SCENE_EDITOR_PORT=8080 \
+    HOME=/home/editor
+# HOME fuer beliebige Nutzer-IDs beschreibbar (Objaverse-/Cachier-Cache;
+# docker-compose legt ein Volume darauf, damit der Katalog nur einmal laedt).
+RUN mkdir -p /home/editor && chmod 1777 /home/editor
+
+WORKDIR /unitree_mujoco/scene_editor
+EXPOSE 8080
+CMD ["bash", "launch.sh"]

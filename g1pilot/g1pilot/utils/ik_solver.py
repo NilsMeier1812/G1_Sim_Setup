@@ -208,6 +208,10 @@ class G1IKSolver:
         # transformiert /scene_markers (Frame 'map') per TF dorthin, BEVOR er
         # sync_environment() aufruft.
         self._env_objects = {}
+        # Dieselben Objekte als gestapelte Arrays (pos, R, half, is_grasp) fuer
+        # den vektorisierten Check - der Planer ruft ihn tausendfach auf, und
+        # eine CAD-Zelle bringt Hunderte Objekte mit. Wird in sync_environment()
+        # als EIN Tupel ersetzt (atomar fuer den lesenden Regelkreis-Thread).
         self._env_arrays = None
         # Eigenes pin.Data fuer den Umgebungs-Check (analog zu _gate_data oben):
         # die FK hier darf NICHT self.data (Solver-Zustand, von solve()/anderen
@@ -357,8 +361,6 @@ class G1IKSolver:
                 "pos": pos, "R": R, "half": half,
             }
         self._env_objects = new_objects
-        # Dieselben Objekte als Arrays fuer den vektorisierten Check (der Planer
-        # ruft ihn tausendfach auf; ein zerlegter Arbeitsplatz hat ~65 Boxen).
         objs = list(new_objects.values())
         self._env_arrays = None if not objs else (
             np.stack([o["pos"] for o in objs]),
@@ -397,7 +399,8 @@ class G1IKSolver:
         wuerden sie sich mit dem 250-Hz-Regelkreis denselben mutable Zustand
         teilen (Pinocchio-Kontrakt: Model ist threadsicher/read-only, Data
         ist mutabler Scratch-Zustand pro Aufrufer)."""
-        if not self._env_objects:
+        arrays = self._env_arrays   # EINMAL lesen: sync_environment() ersetzt es atomar
+        if arrays is None:
             return False
         data = data if data is not None else self._env_data
         q = pin.neutral(self.model)
@@ -429,10 +432,10 @@ class G1IKSolver:
                 pts.append(p); margins.append(arm_margin); vs_grasp.append(True)
             for p in hand:
                 pts.append(p); margins.append(hand_margin); vs_grasp.append(False)
-        if not pts or self._env_arrays is None:
+        if not pts:
             return False
 
-        P, R, H, is_grasp = self._env_arrays
+        P, R, H, is_grasp = arrays
         pts = np.asarray(pts)                                   # (M,3)
         # Punkte in die Box-Achsen drehen: local[m,n] = R[n]^T (p[m] - P[n])
         local = np.einsum("nji,mnj->mni", R, pts[:, None, :] - P[None, :, :])

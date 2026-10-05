@@ -140,9 +140,20 @@ dagegen nicht zuverlässig. GPU/CUDA wird nicht gebraucht.
 Empfohlen: Windows 11 (WSLg für die GUIs ist eingebaut).
 
 ```powershell
-# In PowerShell (als Administrator): WSL2 + Ubuntu installieren, dann neu starten
-wsl --install -d Ubuntu
+# In PowerShell: WSL2 + Ubuntu 24.04 installieren (ggf. danach neu starten)
+wsl --install -d Ubuntu-24.04
 ```
+
+Bewusst **Ubuntu-24.04** und nicht `Ubuntu`: `Ubuntu` ist immer die neueste
+Version (26.04, Python 3.14) – damit laesst sich der Scene Editor nicht
+einrichten (braucht Python < 3.13). Gestartet wird sie danach mit
+`wsl -d Ubuntu-24.04` bzw. ueber „Ubuntu 24.04" im Startmenue.
+
+Ist **Docker Desktop** installiert: es haengt sich standardmaessig in die
+*Standard*-WSL-Distribution ein und kollidiert dort mit der nativen
+Docker-Engine. Entweder Ubuntu nicht zur Standard-Distribution machen oder in
+Docker Desktop unter *Settings → Resources → WSL integration* die Integration
+fuer Ubuntu-24.04 ausschalten.
 
 Danach im Ubuntu-Terminal (WSL) weiter — ab hier identisch zur
 Linux-Anleitung oben:
@@ -266,6 +277,21 @@ Set-NetFirewallHyperVVMSetting -Name '{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}' -D
 - **Proxy:** Falls das Institut einen HTTP-Proxy anbietet, diesen für apt
   (`/etc/apt/apt.conf.d/`), pip (`HTTPS_PROXY`) und Docker
   (`/etc/systemd/system/docker.service.d/`) eintragen.
+
+### Nur Umgebungen bauen: Scene Editor mit Docker Desktop
+
+Für den Scene Editor (Umgebungen bauen, CAD/STEP importieren) reicht
+**Docker Desktop** – er braucht weder Host-Networking noch X11, die
+Oberfläche läuft im Browser. In PowerShell im Ordner `g1pilot/`:
+
+```powershell
+docker compose --profile editor build scene-editor         # einmalig, ~5 min
+docker compose --profile editor run --rm --service-ports scene-editor
+# -> Menü von launch.sh; Editor im Browser: http://127.0.0.1:8080
+```
+
+Details (CAD-Dateien importieren, Argumente für `launch.sh`) in
+`unitree_mujoco/scene_editor/README.md`, Abschnitt „Setup unter Windows".
 
 ## Starten im Alltag
 

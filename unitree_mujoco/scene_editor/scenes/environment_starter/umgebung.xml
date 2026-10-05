@@ -7,23 +7,21 @@
        dazu - hier also NICHT nochmal definieren. Nur die Objekte.
 
        Diese Datei bearbeitest du im Editor (./launch.sh) und waehlst sie beim
-       G1-Start (g1pilot/start.sh) aus. Mesh-Pfade relativ zu dieser Datei
-       (../meshes/...).
+       G1-Start (g1pilot/start.sh) aus. Alle Meshes liegen in meshes/ neben
+       dieser Datei (Pfade relativ, z.B. meshes/kiste.stl) - so ist der Ordner
+       eine vollstaendige Umgebung, die man kopieren/zippen kann.
        ===================================================================== -->
-
   <asset>
     <!-- Eigene STL-Meshes fuer die Objekte. scale beachten (CAD oft in mm). -->
-    <mesh name="sample_crate" file="../meshes/sample_crate.stl"/>
-    <mesh name="sample_ramp"  file="../meshes/sample_ramp.stl"/>
+    <mesh name="sample_crate" file="meshes/sample_crate.stl" />
+    <mesh name="sample_ramp" file="meshes/sample_ramp.stl" />
   </asset>
-
   <worldbody>
     <!-- Primitive Hindernisse (kein Mesh noetig). -->
-    <geom name="box_demo"      type="box"      pos="1.0  0.6 0.15" size="0.15 0.15 0.15" rgba="0.85 0.45 0.20 1"/>
-    <geom name="cylinder_demo" type="cylinder" pos="1.0 -0.6 0.25" size="0.15 0.25"      rgba="0.30 0.55 0.75 1"/>
-
+    <geom name="box_demo" type="box" pos="1.0  0.6 0.15" size="0.15 0.15 0.15" rgba="0.85 0.45 0.20 1" />
+    <geom name="cylinder_demo" type="cylinder" pos="1.0 -0.6 0.25" size="0.15 0.25" rgba="0.30 0.55 0.75 1" />
     <!-- Eigene STL-Objekte. -->
-    <geom name="crate_demo" type="mesh" mesh="sample_crate" pos="1.6  0.0 0.15" rgba="0.60 0.60 0.62 1"/>
-    <geom name="ramp_demo"  type="mesh" mesh="sample_ramp"  pos="2.0 -0.3 0.0"  rgba="0.45 0.70 0.45 1"/>
+    <geom name="crate_demo" type="mesh" mesh="sample_crate" pos="1.6  0.0 0.15" rgba="0.60 0.60 0.62 1" />
+    <geom name="ramp_demo" type="mesh" mesh="sample_ramp" pos="2.0 -0.3 0.0" rgba="0.45 0.70 0.45 1" />
   </worldbody>
 </mujoco>
